@@ -13,9 +13,9 @@ fn main() {
     loop {
         system.refresh_all();
         for process in system.processes_by_name("Spotify") {
-            let window_title = process::find_main_window_title(process.pid().as_u32());
-            if !window_title.is_empty() {
-                println!("{}", window_title);
+            let pid = process.pid().as_u32();
+            if let Some(title) = process::find_main_window_title(pid) {
+                println!("{}", title);
             }
         }
         if let Err(TryRecvError::Empty) = r.try_recv() {
