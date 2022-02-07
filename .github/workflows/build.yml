@@ -1,0 +1,33 @@
+name: Build for Windows
+on: [push, pull_request]
+
+jobs:
+  build:
+    name: Build Windows binary
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: x86_64-pc-windows-msvc
+          override: true
+      - name: Build the application
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --all-features
+      - name: Compress binary with UPX
+        uses: crazy-max/ghaction-upx@v1
+        with:
+          version: latest
+          files: |
+            ${{ github.workspace }}/target/release/currentsong.exe
+          args: "-9"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: "CurrentSong (Windows)"
+          path: "${{ github.workspace }}/target/release/currentsong.exe"
+          if-no-files-found: error
