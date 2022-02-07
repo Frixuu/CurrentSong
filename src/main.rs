@@ -20,7 +20,7 @@ fn main() {
     let config_path = directory.join("config.json");
     if !config_path.exists() {
         let default_config = Config::default();
-        let default_config_json = serde_json::to_string(&default_config).unwrap();
+        let default_config_json = serde_json::to_string_pretty(&default_config).unwrap();
         fs::write(&config_path, default_config_json).expect("Cannot write default config");
         // Since this is probably a first time run,
         // reveal the directory to show the user where we store the app's files
