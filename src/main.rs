@@ -1,8 +1,10 @@
+use config::Config;
 use crossbeam_channel::RecvTimeoutError;
 use song::SongInfo;
-use std::{thread, time::Duration};
+use std::{fs, thread, time::Duration};
 use sysinfo::{PidExt, ProcessExt, ProcessRefreshKind, System, SystemExt};
 
+mod config;
 mod process;
 mod song;
 
@@ -12,13 +14,34 @@ fn main() {
     ctrlc::set_handler(move || signal_sender.send(()).expect("Cannot send signal"))
         .expect("Cannot set handler");
 
+    let directory = dirs::config_dir().unwrap().join("Frixuu.CurrentSong");
+    fs::create_dir_all(&directory).expect("Cannot create config dir");
+
+    let config_path = directory.join("config.json");
+    if !config_path.exists() {
+        let default_config = Config::default();
+        let default_config_json = serde_json::to_string(&default_config).unwrap();
+        fs::write(&config_path, default_config_json).expect("Cannot write default config");
+        // Since this is probably a first time run,
+        // reveal the directory to show the user where we store the app's files
+        open::that_in_background(&directory);
+    }
+
+    let config = fs::read_to_string(&config_path)
+        .map(|json| serde_json::from_str::<Config>(&json).expect("Cannot parse config file"))
+        .expect("Cannot read config file");
+
     // Create another thread for handling song information.
     // This should help with IO access times being unpredictable
     let (song_sender, song_receiver) = crossbeam_channel::unbounded::<Option<SongInfo>>();
     let writing_thread = thread::spawn(move || loop {
         match song_receiver.recv() {
             Ok(Some(song)) => {
-                println!("Now: {} by {}", song.title, song.artist);
+                let format = config.song_format();
+                let song_str = format
+                    .replace("{artist}", &song.artist)
+                    .replace("{title}", &song.title);
+                println!("Now: {}", song_str);
             }
             Ok(None) => {
                 println!("Now: ---");
