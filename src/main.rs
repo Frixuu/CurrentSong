@@ -14,22 +14,17 @@ fn main() {
     ctrlc::set_handler(move || signal_sender.send(()).expect("Cannot send signal"))
         .expect("Cannot set handler");
 
+    // Ensure our data directory exists
     let directory = dirs::config_dir().unwrap().join("Frixuu.CurrentSong");
     fs::create_dir_all(&directory).expect("Cannot create config dir");
 
     let config_path = directory.join("config.json");
-    if !config_path.exists() {
-        let default_config = Config::default();
-        let default_config_json = serde_json::to_string_pretty(&default_config).unwrap();
-        fs::write(&config_path, default_config_json).expect("Cannot write default config");
-        // Since this is probably a first time run,
-        // reveal the directory to show the user where we store the app's files
+    let (config, existed) = Config::read_or_save_default(config_path).expect("Cannot load config");
+    // Since this is probably a first time run,
+    // reveal the directory to show the user where we store the app's files
+    if !existed {
         open::that_in_background(&directory);
     }
-
-    let config = fs::read_to_string(&config_path)
-        .map(|json| serde_json::from_str::<Config>(&json).expect("Cannot parse config file"))
-        .expect("Cannot read config file");
 
     // Create another thread for handling song information.
     // This should help with IO access times being unpredictable
