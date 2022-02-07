@@ -2,9 +2,9 @@ use config::Config;
 use crossbeam_channel::RecvTimeoutError;
 use song::SongInfo;
 use std::{fs, thread, time::Duration};
-use sysinfo::{PidExt, ProcessExt, ProcessRefreshKind, System, SystemExt};
 
 mod config;
+mod driver;
 mod process;
 mod song;
 
@@ -29,42 +29,31 @@ fn main() {
     // Create another thread for handling song information.
     // This should help with IO access times being unpredictable
     let (song_sender, song_receiver) = crossbeam_channel::unbounded::<Option<SongInfo>>();
-    let writing_thread = thread::spawn(move || loop {
-        match song_receiver.recv() {
-            Ok(Some(song)) => {
-                let format = config.song_format();
-                let song_str = format
-                    .replace("{artist}", &song.artist)
-                    .replace("{title}", &song.title);
-                println!("Now: {}", song_str);
+    let writing_config = config.clone();
+    let writing_thread = thread::spawn(move || {
+        let config = writing_config;
+        loop {
+            match song_receiver.recv() {
+                Ok(Some(song)) => {
+                    let format = config.song_format();
+                    let song_str = format
+                        .replace("{artist}", &song.artist)
+                        .replace("{title}", &song.title);
+                    println!("Now: {}", song_str);
+                }
+                Ok(None) => {
+                    println!("Now: ---");
+                }
+                _ => return,
             }
-            Ok(None) => {
-                println!("Now: ---");
-            }
-            _ => return,
         }
     });
 
-    let mut system = System::new();
+    let mut driver = driver::create(config.driver_name()).expect("Unknown driver name");
     let mut last_song: Option<SongInfo> = None;
-    loop {
-        // Update current process list
-        system.refresh_processes_specifics(ProcessRefreshKind::new());
 
-        // Try to get song info from Spotify window title
-        let mut song: Option<SongInfo> = None;
-        for process in system.processes_by_name("Spotify") {
-            let pid = process.pid().as_u32();
-            if let Some(window_title) = process::find_main_window_title(pid) {
-                if !window_title.starts_with("Spotify") {
-                    let mut parts = window_title.splitn(2, " - ");
-                    let artist = parts.next().unwrap();
-                    let title = parts.next().unwrap();
-                    song = Some(SongInfo::new(artist.into(), title.into()));
-                    break;
-                }
-            }
-        }
+    loop {
+        let song = driver.fetch_song_info();
 
         // Check if the song changed
         if song != last_song {
