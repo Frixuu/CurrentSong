@@ -1,9 +1,7 @@
 use std::string::String;
-use winapi::shared::minwindef::{BOOL, FALSE, TRUE};
-use winapi::shared::windef::HWND;
-use winapi::um::winuser::{
-    EnumWindows, GetWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-    IsWindowVisible,
+use windows_sys::{
+    Win32::Foundation::{BOOL, HWND, LPARAM},
+    Win32::UI::WindowsAndMessaging::*,
 };
 
 struct MainWindowData {
@@ -11,25 +9,20 @@ struct MainWindowData {
     pid: u32,
 }
 
-/// Gets a pointer to a main window of a process.
-/// Note: returned HWND might be null.
-#[cfg(target_os = "windows")]
+/// Gets an opaque handle to a main window of a process.
+/// Note: returned HWND might be zero.
 fn find_main_window_by_process(pid: u32) -> HWND {
     // Capture in EnumWindows
-    let mut data = MainWindowData {
-        handle: std::ptr::null_mut(),
-        pid,
-    };
-    unsafe { EnumWindows(Some(enum_windows_callback), &mut data as *mut _ as isize) };
+    let mut data = MainWindowData { handle: 0, pid };
+    unsafe { EnumWindows(Some(enum_windows_callback), &mut data as *mut _ as LPARAM) };
     data.handle
 }
 
 /// Fetches title of a process' main window, if it has one.
-#[cfg(target_os = "windows")]
 pub fn find_main_window_title(pid: u32) -> Option<String> {
     // Process might not exist or have no windows
     let hwnd = find_main_window_by_process(pid);
-    if hwnd.is_null() {
+    if hwnd == 0 {
         return None;
     }
 
@@ -50,8 +43,7 @@ pub fn find_main_window_title(pid: u32) -> Option<String> {
     String::from_utf16(&wstr).ok()
 }
 
-#[cfg(target_os = "windows")]
-unsafe extern "system" fn enum_windows_callback(hwnd: HWND, param: isize) -> BOOL {
+unsafe extern "system" fn enum_windows_callback(hwnd: HWND, param: LPARAM) -> BOOL {
     // Get process ID of the queried window handle
     let mut pid: u32 = 0;
     GetWindowThreadProcessId(hwnd, &mut pid);
@@ -59,23 +51,23 @@ unsafe extern "system" fn enum_windows_callback(hwnd: HWND, param: isize) -> BOO
     let mut data = param as *mut MainWindowData;
     if (*data).pid != pid {
         // Not the process we're looking for
-        return TRUE;
+        return 1;
     }
 
     const GW_OWNER: u32 = 4;
     let owner = GetWindow(hwnd, GW_OWNER);
-    if !owner.is_null() {
+    if owner != 0 {
         // Window has an owner, we're searching for a top-level one
-        return TRUE;
+        return 1;
     }
 
-    if IsWindowVisible(hwnd) == FALSE {
+    if IsWindowVisible(hwnd) == 0 {
         // We want a visible window only
-        return TRUE;
+        return 1;
     }
 
     // Store current window handle in captured context
     (*data).handle = hwnd;
     // Signal EnumWindows we do not want to iterate windows anymore
-    FALSE
+    0
 }

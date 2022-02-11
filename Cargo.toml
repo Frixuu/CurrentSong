@@ -12,7 +12,7 @@ open = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sysinfo = { version = "0.23", default-features = false }
-winapi = { version = "0.3", features = ["winuser"] }
+windows-sys = { version = "0.32", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
 [profile.release]
 opt-level = 's'
