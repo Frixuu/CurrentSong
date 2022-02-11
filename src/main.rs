@@ -1,7 +1,12 @@
 use config::Config;
 use flume::RecvTimeoutError;
 use song::SongInfo;
-use std::{fs, sync::Arc, thread, time::Duration};
+use std::{
+    fs::{self, File},
+    sync::Arc,
+    thread,
+    time::Duration,
+};
 
 mod config;
 mod driver;
@@ -38,6 +43,13 @@ fn main() {
     let writing_config = config.clone();
     let writing_thread = thread::spawn(move || {
         let config = writing_config;
+
+        // Ensure song info file exists
+        let song_file_path = &directory.join("song.txt");
+        if let Err(err) = File::create(&song_file_path) {
+            eprintln!("  | Cannot create or truncate song.txt: {err:?}")
+        }
+
         loop {
             match song_receiver.recv() {
                 Ok(Some(song)) => {
@@ -45,14 +57,22 @@ fn main() {
                     let song_str = format
                         .replace("{artist}", &song.artist)
                         .replace("{title}", &song.title);
+
                     println!("Now: {}", song_str);
+                    if let Err(err) = fs::write(&song_file_path, &song_str) {
+                        eprintln!("  | Cannot save song.txt: {err:?}");
+                    }
                 }
                 Ok(None) => {
                     println!("Now: ---");
+                    let _ = File::create(&song_file_path);
                 }
-                _ => return,
+                _ => break,
             }
         }
+
+        // Clear the song file on exit to mimic other apps like this
+        let _ = File::create(&song_file_path);
     });
 
     let mut driver = driver::create(config.driver_name()).expect("Unknown driver name");
@@ -78,6 +98,6 @@ fn main() {
     }
 
     // Wait until all files get written to
-    writing_thread.join().unwrap();
     println!("Closing!");
+    writing_thread.join().unwrap();
 }
