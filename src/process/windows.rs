@@ -51,23 +51,22 @@ unsafe extern "system" fn enum_windows_callback(hwnd: HWND, param: LPARAM) -> BO
     let mut data = param as *mut MainWindowData;
     if (*data).pid != pid {
         // Not the process we're looking for
-        return 1;
+        return true.into();
     }
 
-    const GW_OWNER: u32 = 4;
     let owner = GetWindow(hwnd, GW_OWNER);
     if owner != 0 {
         // Window has an owner, we're searching for a top-level one
-        return 1;
+        return true.into();
     }
 
     if IsWindowVisible(hwnd) == 0 {
         // We want a visible window only
-        return 1;
+        return true.into();
     }
 
     // Store current window handle in captured context
     (*data).handle = hwnd;
     // Signal EnumWindows we do not want to iterate windows anymore
-    0
+    false.into()
 }
