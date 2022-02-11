@@ -1,7 +1,7 @@
 use config::Config;
 use crossbeam_channel::RecvTimeoutError;
 use song::SongInfo;
-use std::{fs, thread, time::Duration};
+use std::{fs, sync::Arc, thread, time::Duration};
 
 mod config;
 mod driver;
@@ -19,12 +19,18 @@ fn main() {
     fs::create_dir_all(&directory).expect("Cannot create config dir");
 
     let config_path = directory.join("config.json");
-    let (config, existed) = Config::read_or_save_default(config_path).expect("Cannot load config");
-    // Since this is probably a first time run,
-    // reveal the directory to show the user where we store the app's files
-    if !existed {
+    let config = Arc::new(Config::try_read(&config_path).unwrap_or_else(|_| {
+        // Reveal the directory to show the user where we store the app's files
         open::that_in_background(&directory);
-    }
+        println!("Trying to write a new config file to {:?}", &config_path);
+        let config = Config::default();
+        config
+            .try_save(&config_path)
+            .expect("Cannot save config file");
+
+        // Saved successfully, let's continue
+        config
+    }));
 
     // Create another thread for handling song information.
     // This should help with IO access times being unpredictable

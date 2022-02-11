@@ -1,7 +1,6 @@
 use anyhow::Error;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::{fs, path::Path};
+use std::{fs, io::ErrorKind, path::Path};
 
 #[derive(Deserialize, Serialize, Clone)]
 pub struct Config {
@@ -27,16 +26,35 @@ impl Config {
         self.song_format.as_str()
     }
 
-    pub fn read_or_save_default<P: AsRef<Path>>(path: P) -> Result<(Arc<Config>, bool), Error> {
-        if !path.as_ref().exists() {
-            let config = Config::default();
-            let config_json = serde_json::to_string_pretty(&config).unwrap();
-            fs::write(&path, config_json)?;
-            Ok((Arc::new(config), false))
-        } else {
-            let config_json = fs::read_to_string(&path)?;
-            let config = serde_json::from_str::<Config>(&config_json)?;
-            Ok((Arc::new(config), true))
+    /// Attempts to read and deserialize a new Config instance
+    /// from a file with the provided path.
+    pub fn try_read<P>(path: P) -> Result<Config, Error>
+    where
+        P: AsRef<Path>,
+    {
+        match fs::read_to_string(&path) {
+            Ok(config_json) => {
+                let config = serde_json::from_str::<Config>(&config_json)?;
+                Ok(config)
+            }
+            Err(err) => {
+                if err.kind() == ErrorKind::NotFound {
+                    println!("The config file was not found.");
+                } else {
+                    println!("The config file could not be read.");
+                }
+                Err(err.into())
+            }
         }
+    }
+
+    /// Attempts to serialize this Config instance to a file.
+    pub fn try_save<P>(&self, path: P) -> Result<(), Error>
+    where
+        P: AsRef<Path>,
+    {
+        let config_json = serde_json::to_string_pretty(&self).unwrap();
+        fs::write(&path, config_json)?;
+        Ok(())
     }
 }
