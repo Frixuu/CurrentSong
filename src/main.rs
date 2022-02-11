@@ -1,5 +1,5 @@
 use config::Config;
-use crossbeam_channel::RecvTimeoutError;
+use flume::RecvTimeoutError;
 use song::SongInfo;
 use std::{fs, sync::Arc, thread, time::Duration};
 
@@ -10,7 +10,7 @@ mod song;
 
 fn main() {
     // Handle SIGINT, SIGTERM, etc. for graceful shutdown
-    let (signal_sender, signal_receiver) = crossbeam_channel::unbounded::<()>();
+    let (signal_sender, signal_receiver) = flume::unbounded::<()>();
     ctrlc::set_handler(move || signal_sender.send(()).expect("Cannot send signal"))
         .expect("Cannot set handler");
 
@@ -34,7 +34,7 @@ fn main() {
 
     // Create another thread for handling song information.
     // This should help with IO access times being unpredictable
-    let (song_sender, song_receiver) = crossbeam_channel::unbounded::<Option<SongInfo>>();
+    let (song_sender, song_receiver) = flume::unbounded::<Option<SongInfo>>();
     let writing_config = config.clone();
     let writing_thread = thread::spawn(move || {
         let config = writing_config;
