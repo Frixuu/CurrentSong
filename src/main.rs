@@ -1,5 +1,5 @@
 use config::Config;
-use flume::RecvTimeoutError;
+use flume::{RecvError, RecvTimeoutError};
 use song::SongInfo;
 use std::{
     fs::{self, File},
@@ -7,6 +7,8 @@ use std::{
     thread,
     time::Duration,
 };
+
+use crate::windowing::WindowEvent;
 
 mod config;
 mod driver;
@@ -17,7 +19,9 @@ mod windowing;
 fn main() {
     // Handle SIGINT, SIGTERM, etc. for graceful shutdown
     let (signal_sender, signal_receiver) = flume::unbounded::<()>();
-    ctrlc::set_handler(move || signal_sender.send(()).expect("Cannot send signal"))
+
+    let ssender = signal_sender.clone();
+    ctrlc::set_handler(move || ssender.send(()).expect("Cannot send signal"))
         .expect("Cannot set handler");
 
     // Ensure our data directory exists
@@ -76,8 +80,17 @@ fn main() {
         let _ = File::create(&song_file_path);
     });
 
-    let _window_thread = thread::spawn(move || {
-        windowing::create();
+    let app_sender = signal_sender.clone();
+    let window_thread = thread::spawn(move || {
+        let r = windowing::create();
+        loop {
+            match r.recv() {
+                Err(RecvError::Disconnected) | Ok(WindowEvent::Closed) => {
+                    app_sender.send(()).unwrap();
+                    break;
+                }
+            }
+        }
     });
 
     let mut driver = driver::create(config.driver_name()).expect("Unknown driver name");

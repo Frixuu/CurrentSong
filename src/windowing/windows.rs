@@ -1,14 +1,20 @@
-use std::{ffi::OsStr, os::windows::prelude::OsStrExt};
+use flume::Receiver;
+use std::{
+    ffi::{c_void, OsStr},
+    os::windows::prelude::OsStrExt,
+};
 use thiserror::Error;
 use windows_sys::{
     core::PCWSTR,
     Win32::Foundation::{HWND, LPARAM},
     Win32::{
-        Foundation::{HINSTANCE, LRESULT, WPARAM},
+        Foundation::{BOOL, HINSTANCE, LRESULT, WPARAM},
         Graphics::Gdi::HBRUSH,
         UI::WindowsAndMessaging::*,
     },
 };
+
+use super::WindowEvent;
 
 struct WindowClass {
     name: Vec<u16>,
@@ -91,6 +97,16 @@ impl Window {
     fn show(&self) {
         unsafe { ShowWindow(self.hwnd(), SW_SHOW) };
     }
+
+    /// Retrieves a posted message from the queue (if it exists).
+    fn poll_message(&self) -> Option<MSG> {
+        unsafe {
+            let mut msg: MSG = std::mem::zeroed();
+            let hwnd = std::ptr::null_mut::<c_void>() as *mut _ as HWND;
+            let result = PeekMessageW(&mut msg, hwnd, 0, 0, PM_REMOVE);
+            return if result > 0 { Some(msg) } else { None };
+        }
+    }
 }
 
 unsafe extern "system" fn window_proc(
@@ -100,11 +116,16 @@ unsafe extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
-        WM_DESTROY => PostQuitMessage(0),
-        _ => {}
+        WM_CLOSE => {
+            DestroyWindow(hwnd);
+            0
+        }
+        WM_DESTROY => {
+            PostQuitMessage(0);
+            0
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
-
-    DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
 fn prepare_string(text: &str) -> Vec<u16> {
@@ -113,40 +134,47 @@ fn prepare_string(text: &str) -> Vec<u16> {
     s
 }
 
-pub fn create() {
-    let class = WindowClass::try_register(
-        "CurrentSongWindowClass",
-        WNDCLASSW {
-            style: 0,
-            lpfnWndProc: Some(window_proc),
-            cbClsExtra: 0,
-            cbWndExtra: 0,
-            hInstance: 0 as HINSTANCE,
-            hIcon: 0 as HICON,
-            hCursor: 0 as HICON,
-            hbrBackground: COLOR_BTNSHADOW as HBRUSH,
-            lpszMenuName: std::ptr::null_mut(),
-            lpszClassName: std::ptr::null_mut(),
-        },
-    )
-    .unwrap();
+/// Spawns a window on a separate thread.
+pub fn create() -> Receiver<WindowEvent> {
+    let (wnd_sender, wnd_recvr) = flume::unbounded::<WindowEvent>();
 
-    let window = Window::try_create(&class, "Current Song").unwrap();
-    window.show();
+    let _window_thread = std::thread::spawn(move || {
+        let class = WindowClass::try_register(
+            "CurrentSongWindowClass",
+            WNDCLASSW {
+                style: 0,
+                lpfnWndProc: Some(window_proc),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: 0 as HINSTANCE,
+                hIcon: 0 as HICON,
+                hCursor: 0 as HICON,
+                hbrBackground: COLOR_BTNSHADOW as HBRUSH,
+                lpszMenuName: std::ptr::null_mut(),
+                lpszClassName: std::ptr::null_mut(),
+            },
+        )
+        .unwrap();
 
-    unsafe {
-        let mut msg: MSG = std::mem::zeroed();
+        let window = Window::try_create(&class, "Current Song").unwrap();
+        window.show();
 
-        // process messages
-        loop {
-            if PeekMessageA(&mut msg, window.hwnd(), 0, 0, PM_REMOVE) > 0 {
-                TranslateMessage(&msg);
-                DispatchMessageA(&msg);
+        unsafe {
+            loop {
+                if let Some(msg) = window.poll_message() {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
 
-                if msg.message == WM_QUIT {
-                    break;
+                    match msg.message {
+                        WM_QUIT => break,
+                        _ => {}
+                    }
                 }
             }
+
+            wnd_sender.send(WindowEvent::Closed).unwrap();
         }
-    }
+    });
+
+    wnd_recvr
 }
