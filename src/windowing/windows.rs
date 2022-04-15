@@ -102,12 +102,12 @@ impl Window {
     }
 
     /// Retrieves a posted message from the queue (if it exists).
-    fn poll_message(&self) -> Option<MSG> {
+    fn poll_message(&self) -> Result<MSG, ()> {
         unsafe {
             let mut msg: MSG = std::mem::zeroed();
             let hwnd = std::ptr::null_mut::<c_void>() as *mut _ as HWND;
-            let result = PeekMessageW(&mut msg, hwnd, 0, 0, PM_REMOVE);
-            return if result > 0 { Some(msg) } else { None };
+            let result = GetMessageW(&mut msg, hwnd, 0, 0);
+            return if result == -1 { Err(()) } else { Ok(msg) };
         }
     }
 }
@@ -175,7 +175,7 @@ pub fn create() -> Receiver<WindowEvent> {
 
         unsafe {
             loop {
-                if let Some(msg) = window.poll_message() {
+                if let Ok(msg) = window.poll_message() {
                     TranslateMessage(&msg);
                     DispatchMessageW(&msg);
 
