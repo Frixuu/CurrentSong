@@ -3,10 +3,12 @@ use std::{ffi::OsStr, os::windows::prelude::OsStrExt};
 use windows_sys::Win32::{
     Foundation::HWND,
     Graphics::Gdi::{
-        BeginPaint, CreateFontW, DeleteObject, EndPaint, SelectObject, TextOutW, FW_REGULAR, HDC,
-        HFONT, PAINTSTRUCT,
+        BeginPaint, CreateFontW, DeleteObject, EndPaint, SelectObject, SetBkMode, SetTextColor,
+        TextOutW, BACKGROUND_MODE, FW_REGULAR, HDC, HFONT, PAINTSTRUCT,
     },
 };
+
+use super::gdi::Color;
 
 fn prepare_string(text: &str) -> Vec<u16> {
     let mut s: Vec<u16> = OsStr::new(text).encode_wide().collect();
@@ -15,6 +17,7 @@ fn prepare_string(text: &str) -> Vec<u16> {
 }
 
 pub(crate) trait GdiObject {
+    /// Frees all system resources associated with this font, bitmap, brush etc.
     fn delete(self);
 }
 
@@ -61,10 +64,20 @@ pub(crate) struct DeviceContext {
 }
 
 impl DeviceContext {
+    /// Prepares the specified window for painting.
+    /// The returned context object implicitly calls EndPaint when dropped.
     pub(crate) fn paint(hwnd: HWND) -> Self {
         let mut ps: PAINTSTRUCT = unsafe { std::mem::zeroed() };
         let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
         Self { hwnd, ps, hdc }
+    }
+
+    pub(crate) fn set_background_mix_mode(&self, mode: BACKGROUND_MODE) {
+        unsafe { SetBkMode(self.hdc, mode) };
+    }
+
+    pub(crate) fn set_text_color(&self, color: Color) {
+        unsafe { SetTextColor(self.hdc, color.into()) };
     }
 
     pub(crate) fn text_out(&self, x: i32, y: i32, raw_text: &str) {

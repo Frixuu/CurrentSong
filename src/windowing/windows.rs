@@ -9,12 +9,13 @@ use windows_sys::{
     Win32::Foundation::{HWND, LPARAM},
     Win32::{
         Foundation::{HINSTANCE, LRESULT, WPARAM},
-        Graphics::Gdi::HBRUSH,
+        Graphics::Gdi::{HBRUSH, TRANSPARENT},
         UI::WindowsAndMessaging::*,
     },
 };
 
 use super::{
+    gdi::Color,
     windows_gdi::{DeviceContext, Font, GdiObject},
     WindowEvent,
 };
@@ -125,6 +126,9 @@ unsafe extern "system" fn custom_window_proc(
             let font = Font::create("Segoe UI", 24);
             let prev_font = context.select_font(&font);
 
+            context.set_background_mix_mode(TRANSPARENT);
+            context.set_text_color(Color::rgb(0, 0, 0));
+
             context.text_out(10, 10, "Tekst dolny ąęćżółśńź");
             context.select_font(&prev_font);
             font.delete();
@@ -173,21 +177,19 @@ pub fn create() -> Receiver<WindowEvent> {
         let window = Window::try_create(&class, "Current Song").unwrap();
         window.show();
 
-        unsafe {
-            loop {
-                if let Ok(msg) = window.poll_message() {
-                    TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
-
-                    match msg.message {
-                        WM_QUIT => break,
-                        _ => {}
-                    }
-                }
+        while let Ok(msg) = window.poll_message() {
+            unsafe {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
             }
 
-            wnd_sender.send(WindowEvent::Closed).unwrap();
+            match msg.message {
+                WM_QUIT => break,
+                _ => {}
+            }
         }
+
+        wnd_sender.send(WindowEvent::Closed).unwrap();
     });
 
     wnd_recvr
