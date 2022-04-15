@@ -12,6 +12,7 @@ mod config;
 mod driver;
 mod process;
 mod song;
+mod windowing;
 
 fn main() {
     // Handle SIGINT, SIGTERM, etc. for graceful shutdown
@@ -73,6 +74,10 @@ fn main() {
 
         // Clear the song file on exit to mimic other apps like this
         let _ = File::create(&song_file_path);
+    });
+
+    let _window_thread = thread::spawn(move || {
+        windowing::create();
     });
 
     let mut driver = driver::create(config.driver_name()).expect("Unknown driver name");
