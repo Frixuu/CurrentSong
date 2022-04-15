@@ -1,7 +1,8 @@
-use std::{ffi::OsStr, os::windows::prelude::OsStrExt, string::String};
+use std::{ffi::OsStr, os::windows::prelude::OsStrExt};
 use thiserror::Error;
 use windows_sys::{
-    Win32::Foundation::{BOOL, HWND, LPARAM},
+    core::PCWSTR,
+    Win32::Foundation::{HWND, LPARAM},
     Win32::{
         Foundation::{HINSTANCE, LRESULT, WPARAM},
         Graphics::Gdi::HBRUSH,
@@ -11,7 +12,7 @@ use windows_sys::{
 
 struct WindowClass {
     name: Vec<u16>,
-    atom: u16,
+    _atom: u16,
 }
 
 #[derive(Error, Debug)]
@@ -23,6 +24,7 @@ enum ClassRegisterError {
 }
 
 impl WindowClass {
+    /// Attempts to register a window class.
     fn try_register(name: &str, mut class: WNDCLASSW) -> Result<WindowClass, ClassRegisterError> {
         let class_name = prepare_string(name);
         if class_name.len() > 256 {
@@ -35,7 +37,7 @@ impl WindowClass {
             0 => Err(ClassRegisterError::WindowsError),
             _ => Ok(WindowClass {
                 name: class_name,
-                atom: result,
+                _atom: result,
             }),
         }
     }
@@ -50,22 +52,25 @@ struct Window {
 }
 
 impl Window {
-    fn try_create(class: &WindowClass) -> Result<Window, ()> {
+    fn try_create(class: &WindowClass, title: &str) -> Result<Window, ()> {
         unsafe {
             let (window_width, window_height) = (400, 300);
             let (screen_width, screen_height) =
                 (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
 
+            let title_wide = prepare_string(title);
+            let window_name: PCWSTR = title_wide.as_ptr();
+            let parent: HWND = 0 as HWND;
             let hwnd = CreateWindowExW(
                 0,
                 class.name_ptr(),
-                std::ptr::null_mut(),
+                window_name,
                 WS_OVERLAPPED | WS_MINIMIZEBOX | WS_SYSMENU | WS_CAPTION | WS_BORDER,
                 (screen_width - window_width) / 2,
                 (screen_height - window_height) / 2,
                 window_width,
                 window_height,
-                0 as HWND,
+                parent,
                 0 as HMENU,
                 0 as HINSTANCE,
                 std::ptr::null_mut(),
@@ -126,7 +131,7 @@ pub fn create() {
     )
     .unwrap();
 
-    let window = Window::try_create(&class).unwrap();
+    let window = Window::try_create(&class, "Current Song").unwrap();
     window.show();
 
     unsafe {
