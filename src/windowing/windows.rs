@@ -8,13 +8,16 @@ use windows_sys::{
     core::PCWSTR,
     Win32::Foundation::{HWND, LPARAM},
     Win32::{
-        Foundation::{BOOL, HINSTANCE, LRESULT, WPARAM},
+        Foundation::{HINSTANCE, LRESULT, WPARAM},
         Graphics::Gdi::HBRUSH,
         UI::WindowsAndMessaging::*,
     },
 };
 
-use super::WindowEvent;
+use super::{
+    windows_gdi::{DeviceContext, Font, GdiObject},
+    WindowEvent,
+};
 
 struct WindowClass {
     name: Vec<u16>,
@@ -109,13 +112,24 @@ impl Window {
     }
 }
 
-unsafe extern "system" fn window_proc(
+unsafe extern "system" fn custom_window_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
+        WM_PAINT => {
+            let context = DeviceContext::paint(hwnd);
+
+            let font = Font::create("Segoe UI", 24);
+            let prev_font = context.select_font(&font);
+
+            context.text_out(10, 10, "Tekst dolny ąęćżółśńź");
+            context.select_font(&prev_font);
+            font.delete();
+            0
+        }
         WM_CLOSE => {
             DestroyWindow(hwnd);
             0
@@ -143,7 +157,7 @@ pub fn create() -> Receiver<WindowEvent> {
             "CurrentSongWindowClass",
             WNDCLASSW {
                 style: 0,
-                lpfnWndProc: Some(window_proc),
+                lpfnWndProc: Some(custom_window_proc),
                 cbClsExtra: 0,
                 cbWndExtra: 0,
                 hInstance: 0 as HINSTANCE,
