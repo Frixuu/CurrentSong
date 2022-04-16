@@ -2,33 +2,23 @@ use crate::process;
 use crate::song::SongInfo;
 use sysinfo::{PidExt, ProcessExt, ProcessRefreshKind, System, SystemExt};
 
-/// Driver connects to one or more media players to fetch music data.
-pub trait Driver {
-    /// Get currently playing song's info, if it exists.
-    fn fetch_song_info(&mut self) -> Option<SongInfo>;
-}
+use super::Driver;
 
-/// Factory for creating Driver implementations based on their names.
-pub fn create(name: &str) -> Option<Box<dyn Driver>> {
-    match name {
-        "spotify-desktop" => Some(Box::new(SpotifyDesktop::new())),
-        _ => None,
-    }
-}
-
-pub struct SpotifyDesktop {
+/// A [Driver] that fetches song information
+/// from a locally installed Spotify app (free or premium).
+pub struct SpotifyDesktopDriver {
     system: System,
 }
 
-impl SpotifyDesktop {
-    pub fn new() -> SpotifyDesktop {
-        SpotifyDesktop {
+impl SpotifyDesktopDriver {
+    pub fn new() -> SpotifyDesktopDriver {
+        SpotifyDesktopDriver {
             system: System::new(),
         }
     }
 }
 
-impl Driver for SpotifyDesktop {
+impl Driver for SpotifyDesktopDriver {
     fn fetch_song_info(&mut self) -> Option<SongInfo> {
         let system = &mut self.system;
         system.refresh_processes_specifics(ProcessRefreshKind::new());
