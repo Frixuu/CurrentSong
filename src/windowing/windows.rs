@@ -1,7 +1,10 @@
 use flume::Receiver;
+use parking_lot::Mutex;
 use std::{
     ffi::{c_void, OsStr},
     os::windows::prelude::OsStrExt,
+    sync::Arc,
+    time::Duration,
 };
 use thiserror::Error;
 use windows_sys::{
@@ -17,7 +20,7 @@ use windows_sys::{
 use super::{
     gdi::Color,
     windows_gdi::{DeviceContext, Font, GdiObject},
-    WindowEvent,
+    Window as WindowTrait, WindowEvent,
 };
 
 struct WindowClass {
@@ -57,12 +60,13 @@ impl WindowClass {
     }
 }
 
-struct Window {
+pub struct Window {
     hwnd: HWND,
+    ui_thread_tasks: Mutex<Option<Vec<Box<dyn FnOnce() -> () + Send>>>>,
 }
 
 impl Window {
-    fn try_create(class: &WindowClass, title: &str) -> Result<Window, ()> {
+    fn try_create(class: &WindowClass, title: &str) -> Result<Arc<Window>, ()> {
         unsafe {
             let (window_width, window_height) = (400, 300);
             let (screen_width, screen_height) =
@@ -88,7 +92,10 @@ impl Window {
 
             match hwnd {
                 0 => Err(()),
-                _ => Ok(Window { hwnd }),
+                _ => Ok(Arc::new(Window {
+                    hwnd,
+                    ui_thread_tasks: Mutex::new(Some(vec![])),
+                })),
             }
         }
     }
@@ -103,13 +110,23 @@ impl Window {
     }
 
     /// Retrieves a posted message from the queue (if it exists).
-    fn poll_message(&self) -> Result<MSG, ()> {
+    fn poll_message(&self, timeout: Duration) -> Result<MSG, ()> {
         unsafe {
             let mut msg: MSG = std::mem::zeroed();
-            let hwnd = std::ptr::null_mut::<c_void>() as *mut _ as HWND;
+            let hwnd = 0 as HWND;
+            let timer = SetTimer(hwnd, 0, timeout.as_millis() as u32, None);
             let result = GetMessageW(&mut msg, hwnd, 0, 0);
+            KillTimer(hwnd, timer);
             return if result == -1 { Err(()) } else { Ok(msg) };
         }
+    }
+}
+
+impl super::Window for Window {
+    fn run_on_ui_thread(&self, runnable: impl FnOnce() -> () + 'static + Send) {
+        let mut guard = self.ui_thread_tasks.lock();
+        let tasks = &mut (*guard);
+        tasks.as_mut().unwrap().push(Box::new(runnable));
     }
 }
 
@@ -153,7 +170,8 @@ fn prepare_string(text: &str) -> Vec<u16> {
 }
 
 /// Spawns a window on a separate thread.
-pub fn create() -> Receiver<WindowEvent> {
+pub fn create() -> (Arc<Window>, Receiver<WindowEvent>) {
+    let (ws, wr) = flume::bounded::<Arc<Window>>(1);
     let (wnd_sender, wnd_recvr) = flume::unbounded::<WindowEvent>();
 
     let _window_thread = std::thread::spawn(move || {
@@ -176,21 +194,35 @@ pub fn create() -> Receiver<WindowEvent> {
 
         let window = Window::try_create(&class, "Current Song").unwrap();
         window.show();
+        ws.send(window.clone()).unwrap();
 
-        while let Ok(msg) = window.poll_message() {
+        while let Ok(msg) = window.poll_message(Duration::from_millis(750)) {
             unsafe {
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
 
             match msg.message {
+                WM_PAINT => println!("PAINT"),
                 WM_QUIT => break,
                 _ => {}
+            }
+
+            let tasks: Vec<Box<dyn FnOnce() -> () + 'static + Send>>;
+            {
+                let mut guard = window.ui_thread_tasks.lock();
+                tasks = guard.take().unwrap();
+                *guard = Some(vec![]);
+            }
+
+            for task in tasks {
+                task();
             }
         }
 
         wnd_sender.send(WindowEvent::Closed).unwrap();
     });
 
-    wnd_recvr
+    let window = wr.recv().unwrap();
+    (window, wnd_recvr)
 }

@@ -12,3 +12,7 @@ pub use windows::create;
 pub enum WindowEvent {
     Closed,
 }
+
+pub trait Window {
+    fn run_on_ui_thread(&self, runnable: impl FnOnce() -> () + 'static + Send);
+}

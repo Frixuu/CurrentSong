@@ -12,7 +12,7 @@ use crate::{
     config::Config,
     driver::{self, Driver},
     song::SongInfo,
-    windowing::{self, WindowEvent},
+    windowing::{self, Window, WindowEvent},
 };
 
 pub enum LifecycleEvent {
@@ -171,7 +171,11 @@ impl App {
 
         let app_sender = self.lifecycle_sender.clone();
         self.thread_window = Some(thread::spawn(move || {
-            let r = windowing::create();
+            let (window, r) = windowing::create();
+            thread::sleep(Duration::from_millis(2000));
+            window.run_on_ui_thread(move || {
+                println!("eo");
+            });
             loop {
                 match r.recv() {
                     Err(RecvError::Disconnected) | Ok(WindowEvent::Closed) => {
