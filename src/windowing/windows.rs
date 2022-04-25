@@ -1,10 +1,7 @@
 use flume::Receiver;
 use parking_lot::Mutex;
 use std::{
-    ffi::{c_void, OsStr},
-    os::windows::prelude::OsStrExt,
-    sync::Arc,
-    time::Duration,
+    ffi::OsStr, os::windows::prelude::OsStrExt, sync::Arc, thread::JoinHandle, time::Duration,
 };
 use thiserror::Error;
 use windows_sys::{
@@ -20,7 +17,7 @@ use windows_sys::{
 use super::{
     gdi::Color,
     windows_gdi::{DeviceContext, Font, GdiObject},
-    Window as WindowTrait, WindowEvent,
+    WindowEvent,
 };
 
 struct WindowClass {
@@ -55,22 +52,53 @@ impl WindowClass {
         }
     }
 
+    fn try_create(name: &str) -> Result<WindowClass, ClassRegisterError> {
+        WindowClass::try_register(
+            name,
+            WNDCLASSW {
+                style: 0,
+                lpfnWndProc: Some(custom_window_proc),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: 0 as HINSTANCE,
+                hIcon: 0 as HICON,
+                hCursor: 0 as HICON,
+                hbrBackground: COLOR_BTNSHADOW as HBRUSH,
+                lpszMenuName: std::ptr::null_mut(),
+                lpszClassName: std::ptr::null_mut(),
+            },
+        )
+    }
+
     fn name_ptr(&self) -> *const u16 {
         self.name.as_ptr()
     }
 }
 
+type Runnable = dyn FnOnce() -> () + Send + 'static;
+
+#[derive(Error, Debug)]
+enum WindowCreateError {
+    #[error("CreateWindowExW returned zero")]
+    WindowsError,
+}
+
 pub struct Window {
     hwnd: HWND,
-    ui_thread_tasks: Mutex<Option<Vec<Box<dyn FnOnce() -> () + Send>>>>,
+    ui_thread_tasks: Mutex<Option<Vec<Box<Runnable>>>>,
+}
+
+fn get_primary_display_size() -> (i32, i32) {
+    let width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+    let height = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+    (width, height)
 }
 
 impl Window {
-    fn try_create(class: &WindowClass, title: &str) -> Result<Arc<Window>, ()> {
+    fn try_create(class: &WindowClass, title: &str) -> Result<Arc<Window>, WindowCreateError> {
         unsafe {
             let (window_width, window_height) = (400, 300);
-            let (screen_width, screen_height) =
-                (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+            let (screen_width, screen_height) = get_primary_display_size();
 
             let title_wide = prepare_string(title);
             let window_name: PCWSTR = title_wide.as_ptr();
@@ -91,7 +119,7 @@ impl Window {
             );
 
             match hwnd {
-                0 => Err(()),
+                0 => Err(WindowCreateError::WindowsError),
                 _ => Ok(Arc::new(Window {
                     hwnd,
                     ui_thread_tasks: Mutex::new(Some(vec![])),
@@ -118,6 +146,16 @@ impl Window {
             let result = GetMessageW(&mut msg, hwnd, 0, 0);
             KillTimer(hwnd, timer);
             return if result == -1 { Err(()) } else { Ok(msg) };
+        }
+    }
+
+    // Runs all tasks that have been queued for the UI thread.
+    fn run_queued_tasks(&self) {
+        let mut guard = self.ui_thread_tasks.lock();
+        let tasks = guard.replace(Vec::new()).unwrap();
+        drop(guard);
+        for task in tasks {
+            task();
         }
     }
 }
@@ -174,27 +212,11 @@ pub fn create() -> (Arc<Window>, Receiver<WindowEvent>) {
     let (ws, wr) = flume::bounded::<Arc<Window>>(1);
     let (wnd_sender, wnd_recvr) = flume::unbounded::<WindowEvent>();
 
-    let _window_thread = std::thread::spawn(move || {
-        let class = WindowClass::try_register(
-            "CurrentSongWindowClass",
-            WNDCLASSW {
-                style: 0,
-                lpfnWndProc: Some(custom_window_proc),
-                cbClsExtra: 0,
-                cbWndExtra: 0,
-                hInstance: 0 as HINSTANCE,
-                hIcon: 0 as HICON,
-                hCursor: 0 as HICON,
-                hbrBackground: COLOR_BTNSHADOW as HBRUSH,
-                lpszMenuName: std::ptr::null_mut(),
-                lpszClassName: std::ptr::null_mut(),
-            },
-        )
-        .unwrap();
-
-        let window = Window::try_create(&class, "Current Song").unwrap();
-        window.show();
+    let _window_thread: JoinHandle<anyhow::Result<()>> = std::thread::spawn(move || {
+        let class = WindowClass::try_create("CurrentSongWindowClass")?;
+        let window = Window::try_create(&class, "Current Song")?;
         ws.send(window.clone()).unwrap();
+        window.show();
 
         while let Ok(msg) = window.poll_message(Duration::from_millis(750)) {
             unsafe {
@@ -208,19 +230,11 @@ pub fn create() -> (Arc<Window>, Receiver<WindowEvent>) {
                 _ => {}
             }
 
-            let tasks: Vec<Box<dyn FnOnce() -> () + 'static + Send>>;
-            {
-                let mut guard = window.ui_thread_tasks.lock();
-                tasks = guard.take().unwrap();
-                *guard = Some(vec![]);
-            }
-
-            for task in tasks {
-                task();
-            }
+            window.run_queued_tasks();
         }
 
         wnd_sender.send(WindowEvent::Closed).unwrap();
+        Ok(())
     });
 
     let window = wr.recv().unwrap();
