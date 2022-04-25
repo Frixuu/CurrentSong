@@ -166,6 +166,8 @@ impl Window {
     fn repaint(&self) {
         let context = DeviceContext::paint(self.hwnd());
 
+        context.fill_rect(COLOR_BTNSHADOW as HBRUSH);
+
         let font = Font::create("Segoe UI", 24);
         let prev_font = context.select_font(&font);
 

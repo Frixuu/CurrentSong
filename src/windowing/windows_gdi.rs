@@ -3,8 +3,8 @@ use std::{ffi::OsStr, os::windows::prelude::OsStrExt};
 use windows_sys::Win32::{
     Foundation::HWND,
     Graphics::Gdi::{
-        BeginPaint, CreateFontW, DeleteObject, EndPaint, SelectObject, SetBkMode, SetTextColor,
-        TextOutW, BACKGROUND_MODE, FW_REGULAR, HDC, HFONT, PAINTSTRUCT,
+        BeginPaint, CreateFontW, DeleteObject, EndPaint, FillRect, SelectObject, SetBkMode,
+        SetTextColor, TextOutW, BACKGROUND_MODE, FW_REGULAR, HDC, HFONT, PAINTSTRUCT,
     },
 };
 
@@ -89,6 +89,10 @@ impl DeviceContext {
         Font {
             handle: unsafe { SelectObject(self.hdc, font.handle) } as HFONT,
         }
+    }
+
+    pub(crate) fn fill_rect(&self, brush: isize) {
+        unsafe { FillRect(self.hdc, &self.ps.rcPaint, brush) };
     }
 }
 
