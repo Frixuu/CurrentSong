@@ -1,4 +1,4 @@
-use flume::Receiver;
+use flume::{Receiver, Sender};
 use parking_lot::Mutex;
 use std::{
     ffi::OsStr, os::windows::prelude::OsStrExt, sync::Arc, thread::JoinHandle, time::Duration,
@@ -9,15 +9,17 @@ use windows_sys::{
     Win32::Foundation::{HWND, LPARAM},
     Win32::{
         Foundation::{HINSTANCE, LRESULT, WPARAM},
-        Graphics::Gdi::{HBRUSH, TRANSPARENT},
+        Graphics::Gdi::{InvalidateRect, HBRUSH, TRANSPARENT},
         UI::WindowsAndMessaging::*,
     },
 };
 
+use crate::song::SongInfo;
+
 use super::{
     gdi::Color,
     windows_gdi::{DeviceContext, Font, GdiObject},
-    WindowEvent,
+    Window as WindowTrait, WindowEvent,
 };
 
 struct WindowClass {
@@ -86,6 +88,7 @@ enum WindowCreateError {
 pub struct Window {
     hwnd: HWND,
     ui_thread_tasks: Mutex<Option<Vec<Box<Runnable>>>>,
+    current_info: Mutex<Option<SongInfo>>,
 }
 
 fn get_primary_display_size() -> (i32, i32) {
@@ -123,6 +126,7 @@ impl Window {
                 _ => Ok(Arc::new(Window {
                     hwnd,
                     ui_thread_tasks: Mutex::new(Some(vec![])),
+                    current_info: Mutex::new(None),
                 })),
             }
         }
@@ -158,13 +162,45 @@ impl Window {
             task();
         }
     }
+
+    fn repaint(&self) {
+        let context = DeviceContext::paint(self.hwnd());
+
+        let font = Font::create("Segoe UI", 24);
+        let prev_font = context.select_font(&font);
+
+        context.set_background_mix_mode(TRANSPARENT);
+        context.set_text_color(Color::rgb(0, 0, 0));
+
+        let song: Option<SongInfo>;
+        {
+            let guard = self.current_info.lock();
+            let song_ref: &Option<SongInfo> = &*guard;
+            song = song_ref.clone();
+        }
+
+        let song_as_text = match song {
+            Some(info) => "{artist} - {title}"
+                .replace("{artist}", &info.artist)
+                .replace("{title}", &info.title),
+            None => "...".to_string(),
+        };
+
+        println!("Repaint!");
+        context.text_out(10, 10, &song_as_text);
+        context.select_font(&prev_font);
+        font.delete();
+    }
 }
 
-impl super::Window for Window {
+impl WindowTrait for Window {
     fn run_on_ui_thread(&self, runnable: impl FnOnce() -> () + 'static + Send) {
         let mut guard = self.ui_thread_tasks.lock();
         let tasks = &mut (*guard);
         tasks.as_mut().unwrap().push(Box::new(runnable));
+    }
+    fn post_repaint_request(&self) {
+        unsafe { InvalidateRect(self.hwnd(), std::ptr::null(), 0) };
     }
 }
 
@@ -175,20 +211,7 @@ unsafe extern "system" fn custom_window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
-        WM_PAINT => {
-            let context = DeviceContext::paint(hwnd);
-
-            let font = Font::create("Segoe UI", 24);
-            let prev_font = context.select_font(&font);
-
-            context.set_background_mix_mode(TRANSPARENT);
-            context.set_text_color(Color::rgb(0, 0, 0));
-
-            context.text_out(10, 10, "Tekst dolny ąęćżółśńź");
-            context.select_font(&prev_font);
-            font.delete();
-            0
-        }
+        WM_PAINT => 0,
         WM_CLOSE => {
             DestroyWindow(hwnd);
             0
@@ -208,7 +231,8 @@ fn prepare_string(text: &str) -> Vec<u16> {
 }
 
 /// Spawns a window on a separate thread.
-pub fn create() -> (Arc<Window>, Receiver<WindowEvent>) {
+pub fn create() -> (Arc<Window>, Receiver<WindowEvent>, Sender<Option<SongInfo>>) {
+    let (ss, sr) = flume::unbounded::<Option<SongInfo>>();
     let (ws, wr) = flume::bounded::<Arc<Window>>(1);
     let (wnd_sender, wnd_recvr) = flume::unbounded::<WindowEvent>();
 
@@ -225,12 +249,22 @@ pub fn create() -> (Arc<Window>, Receiver<WindowEvent>) {
             }
 
             match msg.message {
-                WM_PAINT => println!("PAINT"),
+                WM_PAINT => window.repaint(),
                 WM_QUIT => break,
                 _ => {}
             }
 
             window.run_queued_tasks();
+            match sr.try_recv() {
+                Ok(o) => {
+                    {
+                        let mut guard = window.current_info.lock();
+                        *guard = o;
+                    }
+                    window.post_repaint_request();
+                }
+                Err(_) => {}
+            }
         }
 
         wnd_sender.send(WindowEvent::Closed).unwrap();
@@ -238,5 +272,5 @@ pub fn create() -> (Arc<Window>, Receiver<WindowEvent>) {
     });
 
     let window = wr.recv().unwrap();
-    (window, wnd_recvr)
+    (window, wnd_recvr, ss)
 }

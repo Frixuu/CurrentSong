@@ -15,4 +15,5 @@ pub enum WindowEvent {
 
 pub trait Window {
     fn run_on_ui_thread(&self, runnable: impl FnOnce() -> () + 'static + Send);
+    fn post_repaint_request(&self);
 }

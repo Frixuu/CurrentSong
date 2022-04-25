@@ -12,7 +12,7 @@ use crate::{
     config::Config,
     driver::{self, Driver},
     song::SongInfo,
-    windowing::{self, Window, WindowEvent},
+    windowing::{self, WindowEvent},
 };
 
 pub enum LifecycleEvent {
@@ -31,6 +31,8 @@ pub struct App {
     lifecycle_receiver: Receiver<LifecycleEvent>,
     /// Thread that manages writing song data to disk, if one exists.
     thread_file_io: Option<JoinHandle<()>>,
+    /// Thread that manages writing song data to console, if one exists.
+    thread_console: Option<JoinHandle<()>>,
     /// Thread that manages the main window of the application, if one exists.
     thread_window: Option<JoinHandle<()>>,
     /// The driver for resolving current song data.
@@ -64,6 +66,7 @@ impl AppBuilder {
             lifecycle_sender: s,
             lifecycle_receiver: r,
             thread_file_io: None,
+            thread_console: None,
             thread_window: None,
             driver: driver::noop(),
             duration_polling: Duration::from_millis(1500),
@@ -127,19 +130,38 @@ impl App {
         });
     }
 
-    /// Runs the application.
-    /// This method exits only if the app has been gracefully shut down.
-    pub fn run(mut self) {
-        // Create another thread for handling song information.
-        // This should help with IO access times being unpredictable
+    /// Registers a thread in this app which purpose is to write song info to standard output.
+    fn add_write_to_stdout(&mut self, song_channels: &mut Vec<Sender<Option<SongInfo>>>) {
+        let config = self.config.clone();
         let (song_sender, song_receiver) = flume::unbounded::<Option<SongInfo>>();
-        let writing_config = self.config.clone();
-        let writing_dir = self.data_directory.clone();
-        self.thread_file_io = Some(thread::spawn(move || {
-            let config = writing_config;
+        song_channels.push(song_sender);
+        self.thread_console = Some(thread::spawn(move || loop {
+            match song_receiver.recv() {
+                Ok(Some(song)) => {
+                    let format = config.song_format();
+                    let song_str = format
+                        .replace("{artist}", &song.artist)
+                        .replace("{title}", &song.title);
 
+                    println!("Now: {}", song_str);
+                }
+                Ok(None) => {
+                    println!("Now: ---");
+                }
+                _ => break,
+            }
+        }));
+    }
+
+    /// Registers a thread in this app which purpose is to write song info to file.
+    fn add_write_to_file(&mut self, song_channels: &mut Vec<Sender<Option<SongInfo>>>) {
+        let config = self.config.clone();
+        let data_directory = self.data_directory.clone();
+        let (song_sender, song_receiver) = flume::unbounded::<Option<SongInfo>>();
+        song_channels.push(song_sender);
+        self.thread_file_io = Some(thread::spawn(move || {
             // Ensure song info file exists
-            let song_file_path = writing_dir.join("song.txt");
+            let song_file_path = data_directory.join("song.txt");
             if let Err(err) = File::create(&song_file_path) {
                 eprintln!("  | Cannot create or truncate song.txt: {err:?}")
             }
@@ -152,13 +174,11 @@ impl App {
                             .replace("{artist}", &song.artist)
                             .replace("{title}", &song.title);
 
-                        println!("Now: {}", song_str);
                         if let Err(err) = fs::write(&song_file_path, &song_str) {
                             eprintln!("  | Cannot save song.txt: {err:?}");
                         }
                     }
                     Ok(None) => {
-                        println!("Now: ---");
                         let _ = File::create(&song_file_path);
                     }
                     _ => break,
@@ -168,23 +188,34 @@ impl App {
             // Clear the song file on exit to mimic other apps like this
             let _ = File::create(&song_file_path);
         }));
+    }
 
-        let app_sender = self.lifecycle_sender.clone();
+    /// Registers a thread in this app which purpose is to provide a graphical interface.
+    fn add_create_gui(&mut self, song_channels: &mut Vec<Sender<Option<SongInfo>>>) {
+        let lifecycle_sender = self.lifecycle_sender.clone();
+        let (ss, sr) = flume::bounded::<Sender<Option<SongInfo>>>(1);
         self.thread_window = Some(thread::spawn(move || {
-            let (window, r) = windowing::create();
-            thread::sleep(Duration::from_millis(2000));
-            window.run_on_ui_thread(move || {
-                println!("eo");
-            });
+            let (_window, r, s) = windowing::create();
+            ss.send(s).unwrap();
             loop {
                 match r.recv() {
                     Err(RecvError::Disconnected) | Ok(WindowEvent::Closed) => {
-                        app_sender.send(LifecycleEvent::Exit).unwrap();
+                        lifecycle_sender.send(LifecycleEvent::Exit).unwrap();
                         break;
                     }
                 }
             }
         }));
+        song_channels.push(sr.recv().unwrap());
+    }
+
+    /// Runs the application.
+    /// This method exits only if the app has been gracefully shut down.
+    pub fn run(mut self) {
+        let mut song_channels: Vec<Sender<Option<SongInfo>>> = Vec::new();
+        self.add_write_to_stdout(&mut song_channels);
+        self.add_write_to_file(&mut song_channels);
+        self.add_create_gui(&mut song_channels);
 
         let mut last_song: Option<SongInfo> = None;
 
@@ -195,7 +226,9 @@ impl App {
             // Check if the song changed
             if song != last_song {
                 last_song = song.clone();
-                song_sender.send(song).expect("Cannot send updated song");
+                for sender in &song_channels {
+                    sender.send(song.clone()).expect("Cannot send updated song");
+                }
             }
 
             match lifecycle_receiver.recv_timeout(self.duration_polling) {
@@ -203,7 +236,7 @@ impl App {
                     // Timeout is an expected result and not an error
                 }
                 Err(RecvTimeoutError::Disconnected) | Ok(LifecycleEvent::Exit) => {
-                    drop(song_sender);
+                    drop(song_channels);
                     break;
                 }
             }
