@@ -200,6 +200,7 @@ impl App {
             loop {
                 match r.recv() {
                     Err(RecvError::Disconnected) | Ok(WindowEvent::Closed) => {
+                        println!("Window closed! Closing the whole app");
                         lifecycle_sender.send(LifecycleEvent::Exit).unwrap();
                         break;
                     }

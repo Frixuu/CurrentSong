@@ -58,7 +58,7 @@ impl WindowClass {
         WindowClass::try_register(
             name,
             WNDCLASSW {
-                style: 0,
+                style: CS_HREDRAW | CS_VREDRAW,
                 lpfnWndProc: Some(custom_window_proc),
                 cbClsExtra: 0,
                 cbWndExtra: 0,
@@ -188,7 +188,6 @@ impl Window {
             None => "...".to_string(),
         };
 
-        println!("Repaint!");
         context.text_out(10, 10, &song_as_text);
         context.select_font(&prev_font);
         font.delete();
