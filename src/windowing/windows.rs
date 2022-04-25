@@ -62,7 +62,7 @@ impl WindowClass {
                 cbWndExtra: 0,
                 hInstance: 0 as HINSTANCE,
                 hIcon: 0 as HICON,
-                hCursor: 0 as HICON,
+                hCursor: unsafe { LoadCursorW(0, IDC_ARROW) },
                 hbrBackground: COLOR_BTNSHADOW as HBRUSH,
                 lpszMenuName: std::ptr::null_mut(),
                 lpszClassName: std::ptr::null_mut(),
