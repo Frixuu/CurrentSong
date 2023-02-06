@@ -9,7 +9,9 @@ use std::{
 use flume::{Receiver, RecvError, RecvTimeoutError, Sender};
 
 use crate::{
+    actor::{Actor, ActorHandle},
     config::Config,
+    console::ConsoleActor,
     driver::{self, Driver},
     song::SongInfo,
     windowing::{self, WindowEvent},
@@ -31,8 +33,8 @@ pub struct App {
     lifecycle_receiver: Receiver<LifecycleEvent>,
     /// Thread that manages writing song data to disk, if one exists.
     thread_file_io: Option<JoinHandle<()>>,
-    /// Thread that manages writing song data to console, if one exists.
-    thread_console: Option<JoinHandle<()>>,
+    /// Actor that manages writing song data to console, if one exists.
+    console_actor: Option<ActorHandle<Option<SongInfo>>>,
     /// Thread that manages the main window of the application, if one exists.
     thread_window: Option<JoinHandle<()>>,
     /// The driver for resolving current song data.
@@ -66,7 +68,7 @@ impl AppBuilder {
             lifecycle_sender: s,
             lifecycle_receiver: r,
             thread_file_io: None,
-            thread_console: None,
+            console_actor: None,
             thread_window: None,
             driver: driver::noop(),
             duration_polling: Duration::from_millis(1500),
@@ -114,7 +116,7 @@ impl App {
                     .try_save(&config_path)
                     .expect("Cannot save config file");
 
-                open::that_in_background(&self.data_directory);
+                open::that(&self.data_directory).expect("Cannot reveal data directory");
                 config
             }
         };
@@ -131,26 +133,9 @@ impl App {
     }
 
     /// Registers a thread in this app which purpose is to write song info to standard output.
-    fn add_write_to_stdout(&mut self, song_channels: &mut Vec<Sender<Option<SongInfo>>>) {
+    fn add_write_to_stdout(&mut self) {
         let config = self.config.clone();
-        let (song_sender, song_receiver) = flume::unbounded::<Option<SongInfo>>();
-        song_channels.push(song_sender);
-        self.thread_console = Some(thread::spawn(move || loop {
-            match song_receiver.recv() {
-                Ok(Some(song)) => {
-                    let format = config.song_format();
-                    let song_str = format
-                        .replace("{artist}", &song.artist)
-                        .replace("{title}", &song.title);
-
-                    println!("Now: {}", song_str);
-                }
-                Ok(None) => {
-                    println!("Now: ---");
-                }
-                _ => break,
-            }
-        }));
+        self.console_actor = ConsoleActor::new(config).spawn().into();
     }
 
     /// Registers a thread in this app which purpose is to write song info to file.
@@ -214,7 +199,7 @@ impl App {
     /// This method exits only if the app has been gracefully shut down.
     pub fn run(mut self) {
         let mut song_channels: Vec<Sender<Option<SongInfo>>> = Vec::new();
-        self.add_write_to_stdout(&mut song_channels);
+        self.add_write_to_stdout();
         self.add_write_to_file(&mut song_channels);
         self.add_create_gui(&mut song_channels);
 
@@ -229,6 +214,11 @@ impl App {
                 last_song = song.clone();
                 for sender in &song_channels {
                     sender.send(song.clone()).expect("Cannot send updated song");
+                }
+                if let Some(console_actor) = &self.console_actor {
+                    console_actor
+                        .send(song.clone())
+                        .expect("Cannot send updated song");
                 }
             }
 

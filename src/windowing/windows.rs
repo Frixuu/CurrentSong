@@ -177,8 +177,7 @@ impl Window {
         let song: Option<SongInfo>;
         {
             let guard = self.current_info.lock();
-            let song_ref: &Option<SongInfo> = &*guard;
-            song = song_ref.clone();
+            song = (&*guard).clone();
         }
 
         let song_as_text = match song {
