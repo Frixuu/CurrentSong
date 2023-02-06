@@ -58,7 +58,7 @@ impl WindowClass {
         WindowClass::try_register(
             name,
             WNDCLASSW {
-                style: CS_HREDRAW | CS_VREDRAW,
+                style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
                 lpfnWndProc: Some(custom_window_proc),
                 cbClsExtra: 0,
                 cbWndExtra: 0,
@@ -66,8 +66,8 @@ impl WindowClass {
                 hIcon: 0 as HICON,
                 hCursor: unsafe { LoadCursorW(0, IDC_ARROW) },
                 hbrBackground: COLOR_BTNSHADOW as HBRUSH,
-                lpszMenuName: std::ptr::null_mut(),
-                lpszClassName: std::ptr::null_mut(),
+                lpszMenuName: std::ptr::null(),
+                lpszClassName: std::ptr::null(),
             },
         )
     }
