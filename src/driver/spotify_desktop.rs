@@ -22,19 +22,17 @@ impl Driver for SpotifyDesktopDriver {
     fn fetch_song_info(&mut self) -> Option<SongInfo> {
         let system = &mut self.system;
         system.refresh_processes_specifics(ProcessRefreshKind::new());
-        let mut song: Option<SongInfo> = None;
         for process in system.processes_by_name("Spotify") {
             let pid = process.pid().as_u32();
-            if let Some(window_title) = process::find_main_window_title(pid) {
-                if !window_title.starts_with("Spotify") {
-                    let mut parts = window_title.splitn(2, " - ");
-                    let artist = parts.next().unwrap();
-                    let title = parts.next().unwrap();
-                    song = Some(SongInfo::new(artist.into(), title.into()));
-                    break;
-                }
+            let Some(window_title) = process::find_main_window_title(pid) else { continue; };
+            if !window_title.starts_with("Spotify") {
+                let Some((artist, title)) = window_title.split_once(" - ") else { break; };
+                return Some(SongInfo {
+                    artist: artist.into(),
+                    title: title.into(),
+                });
             }
         }
-        song
+        None
     }
 }
