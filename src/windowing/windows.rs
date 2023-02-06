@@ -9,7 +9,7 @@ use windows_sys::{
     Win32::Foundation::{HWND, LPARAM},
     Win32::{
         Foundation::{HINSTANCE, LRESULT, WPARAM},
-        Graphics::Gdi::{InvalidateRect, HBRUSH, TRANSPARENT},
+        Graphics::Gdi::{InvalidateRect, COLOR_BTNSHADOW, HBRUSH, TRANSPARENT},
         UI::WindowsAndMessaging::*,
     },
 };
