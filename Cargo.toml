@@ -5,16 +5,21 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
+arc-swap = "1.5"
 ctrlc = { version = "3.0", features = ["termination"] }
 dirs = "4.0"
 flume = "0.10"
-open = "2.1"
+open = "3.0"
 parking_lot = "0.12"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sysinfo = { version = "0.23", default-features = false }
+sysinfo = { version = "0.24", default-features = false }
 thiserror = "1.0"
-windows-sys = { version = "0.35", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
+windows-sys = { version = "0.36", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+] }
 
 [profile.release]
 opt-level = 's'
