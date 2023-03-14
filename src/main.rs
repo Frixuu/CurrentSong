@@ -10,7 +10,7 @@ mod console;
 mod driver;
 mod process;
 mod song;
-mod windowing;
+mod window;
 
 fn main() {
     let app = AppBuilder::new().build();

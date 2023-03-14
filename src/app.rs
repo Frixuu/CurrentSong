@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use flume::{Receiver, RecvError, RecvTimeoutError, Sender};
+use flume::{Receiver, RecvTimeoutError, Sender};
 
 use crate::{
     actor::{Actor, ActorHandle},
@@ -14,7 +14,7 @@ use crate::{
     console::ConsoleActor,
     driver::{self, Driver},
     song::SongInfo,
-    windowing::{self, WindowEvent},
+    window::WindowActor,
 };
 
 pub enum LifecycleEvent {
@@ -35,8 +35,7 @@ pub struct App {
     thread_file_io: Option<JoinHandle<()>>,
     /// Actor that manages writing song data to console, if one exists.
     console_actor: Option<ActorHandle<Option<SongInfo>>>,
-    /// Thread that manages the main window of the application, if one exists.
-    thread_window: Option<JoinHandle<()>>,
+    window_actor: Option<ActorHandle<Option<SongInfo>>>,
     /// The driver for resolving current song data.
     driver: Box<dyn Driver>,
     /// Time interval between requesting song information.
@@ -69,7 +68,7 @@ impl AppBuilder {
             lifecycle_receiver: r,
             thread_file_io: None,
             console_actor: None,
-            thread_window: None,
+            window_actor: None,
             driver: driver::noop(),
             duration_polling: Duration::from_millis(1500),
         };
@@ -97,10 +96,6 @@ impl App {
     fn clean_up_before_exit(self) {
         if let Some(thread_handle) = self.thread_file_io {
             thread_handle.join().unwrap();
-        }
-
-        if let Some(thread_window) = self.thread_window {
-            thread_window.thread().unpark();
         }
     }
 
@@ -136,6 +131,11 @@ impl App {
     fn add_write_to_stdout(&mut self) {
         let config = self.config.clone();
         self.console_actor = ConsoleActor::new(config).spawn().into();
+    }
+
+    fn add_gui_window(&mut self) {
+        let lifecycle_sender = self.lifecycle_sender.clone();
+        self.window_actor = WindowActor::new(lifecycle_sender).spawn().into();
     }
 
     /// Registers a thread in this app which purpose is to write song info to file.
@@ -175,33 +175,13 @@ impl App {
         }));
     }
 
-    /// Registers a thread in this app which purpose is to provide a graphical interface.
-    fn add_create_gui(&mut self, song_channels: &mut Vec<Sender<Option<SongInfo>>>) {
-        let lifecycle_sender = self.lifecycle_sender.clone();
-        let (ss, sr) = flume::bounded::<Sender<Option<SongInfo>>>(1);
-        self.thread_window = Some(thread::spawn(move || {
-            let (_window, r, s) = windowing::create();
-            ss.send(s).unwrap();
-            loop {
-                match r.recv() {
-                    Err(RecvError::Disconnected) | Ok(WindowEvent::Closed) => {
-                        println!("Window closed! Closing the whole app");
-                        lifecycle_sender.send(LifecycleEvent::Exit).unwrap();
-                        break;
-                    }
-                }
-            }
-        }));
-        song_channels.push(sr.recv().unwrap());
-    }
-
     /// Runs the application.
     /// This method exits only if the app has been gracefully shut down.
     pub fn run(mut self) {
         let mut song_channels: Vec<Sender<Option<SongInfo>>> = Vec::new();
         self.add_write_to_stdout();
+        self.add_gui_window();
         self.add_write_to_file(&mut song_channels);
-        self.add_create_gui(&mut song_channels);
 
         let mut last_song: Option<SongInfo> = None;
 
@@ -217,6 +197,11 @@ impl App {
                 }
                 if let Some(console_actor) = &self.console_actor {
                     console_actor
+                        .send(song.clone())
+                        .expect("Cannot send updated song");
+                }
+                if let Some(window_actor) = &self.window_actor {
+                    window_actor
                         .send(song.clone())
                         .expect("Cannot send updated song");
                 }
