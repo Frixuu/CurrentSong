@@ -1,7 +1,7 @@
 use std::{cell::RefCell, ops::Deref, rc::Rc, sync::Arc};
 
 use flume::{Receiver, Sender};
-use nwg::{Event, NativeUi, WindowFlags};
+use nwg::{EmbedResource, Event, Icon, NativeUi, WindowFlags};
 use parking_lot::Mutex;
 
 use crate::{app::LifecycleEvent, song::SongInfo, Actor, ActorHandle};
@@ -66,6 +66,7 @@ struct WindowUi {
 
 impl nwg::NativeUi<WindowUi> for WindowApp {
     fn build_ui(mut state: Self) -> Result<WindowUi, nwg::NwgError> {
+        let embed = EmbedResource::load(None)?;
         nwg::Window::builder()
             .size((400, 120))
             .flags(WindowFlags::union(
@@ -73,6 +74,7 @@ impl nwg::NativeUi<WindowUi> for WindowApp {
                 WindowFlags::MINIMIZE_BOX,
             ))
             .title("Current Song")
+            .icon(Some(&Icon::from_embed(&embed, None, Some("ICON"))?))
             .build(&mut state.window)?;
 
         nwg::Notice::builder()

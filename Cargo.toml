@@ -10,6 +10,7 @@ dirs = "4"
 flume = { version = "0.10", default-features = false }
 nwg = { version = "^1.0", package = "native-windows-gui", default-features = false, features = [
     "notice",
+    "embed-resource",
 ] }
 open = "4"
 parking_lot = "0.12"
@@ -20,6 +21,7 @@ windows-sys = { version = "0.45", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]
 embed-manifest = "1.3"
+winres = "0.1"
 
 [profile.release]
 opt-level = "z"
