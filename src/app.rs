@@ -1,8 +1,7 @@
 use std::{
-    fs::{self, File},
+    fs::{self},
     path::PathBuf,
     sync::Arc,
-    thread::{self, JoinHandle},
     time::Duration,
 };
 
@@ -13,6 +12,7 @@ use crate::{
     config::Config,
     console::ConsoleActor,
     driver::{self, Driver},
+    file::FileWriterActor,
     song::SongInfo,
     window::WindowActor,
 };
@@ -31,20 +31,14 @@ pub struct App {
     /// to influence the behavior of the application.
     lifecycle_sender: Sender<LifecycleEvent>,
     lifecycle_receiver: Receiver<LifecycleEvent>,
-    /// Thread that manages writing song data to disk, if one exists.
-    thread_file_io: Option<JoinHandle<()>>,
     /// Actor that manages writing song data to console, if one exists.
     console_actor: Option<ActorHandle<Option<SongInfo>>>,
     window_actor: Option<ActorHandle<Option<SongInfo>>>,
+    file_actor: Option<ActorHandle<Option<SongInfo>>>,
     /// The driver for resolving current song data.
     driver: Box<dyn Driver>,
     /// Time interval between requesting song information.
-    duration_polling: Duration,
-}
-
-trait AppModule {
-    fn start(app: &mut App);
-    fn stop(app: &mut App);
+    polling_interval: Duration,
 }
 
 /// A helper object for creating the application.
@@ -66,16 +60,20 @@ impl AppBuilder {
             config: Arc::new(Config::default()),
             lifecycle_sender: s,
             lifecycle_receiver: r,
-            thread_file_io: None,
             console_actor: None,
             window_actor: None,
+            file_actor: None,
             driver: driver::noop(),
-            duration_polling: Duration::from_millis(1500),
+            polling_interval: Duration::from_millis(1500),
         };
 
         app.load_config();
         app.load_driver();
         app.setup_interrupts();
+
+        app.add_write_to_stdout();
+        app.add_gui_window();
+        app.add_write_to_file();
 
         app
     }
@@ -91,12 +89,6 @@ impl App {
                 .expect("cannot send signal")
         })
         .expect("cannot set handler");
-    }
-
-    fn clean_up_before_exit(self) {
-        if let Some(thread_handle) = self.thread_file_io {
-            thread_handle.join().unwrap();
-        }
     }
 
     fn load_config(&mut self) {
@@ -140,86 +132,48 @@ impl App {
             .into();
     }
 
-    /// Registers a thread in this app which purpose is to write song info to file.
-    fn add_write_to_file(&mut self, song_channels: &mut Vec<Sender<Option<SongInfo>>>) {
+    fn add_write_to_file(&mut self) {
         let config = self.config.clone();
         let data_directory = self.data_directory.clone();
-        let (song_sender, song_receiver) = flume::unbounded::<Option<SongInfo>>();
-        song_channels.push(song_sender);
-        self.thread_file_io = Some(thread::spawn(move || {
-            // Ensure song info file exists
-            let song_file_path = data_directory.join("song.txt");
-            if let Err(err) = File::create(&song_file_path) {
-                eprintln!("  | Cannot create or truncate song.txt: {err:?}")
-            }
-
-            loop {
-                match song_receiver.recv() {
-                    Ok(Some(song)) => {
-                        let format = config.song_format();
-                        let song_str = format
-                            .replace("{artist}", &song.artist)
-                            .replace("{title}", &song.title);
-
-                        if let Err(err) = fs::write(&song_file_path, &song_str) {
-                            eprintln!("  | Cannot save song.txt: {err:?}");
-                        }
-                    }
-                    Ok(None) => {
-                        let _ = File::create(&song_file_path);
-                    }
-                    _ => break,
-                }
-            }
-
-            // Clear the song file on exit to mimic other apps like this
-            let _ = File::create(&song_file_path);
-        }));
+        let path = data_directory.join("song.txt");
+        self.file_actor = FileWriterActor::new(path, config).spawn().into();
     }
 
     /// Runs the application.
     /// This method exits only if the app has been gracefully shut down.
     pub fn run(mut self) {
-        let mut song_channels: Vec<Sender<Option<SongInfo>>> = Vec::new();
-        self.add_write_to_stdout();
-        self.add_gui_window();
-        self.add_write_to_file(&mut song_channels);
+        let actors = [self.console_actor, self.window_actor, self.file_actor]
+            .into_iter()
+            .filter_map(|o| o)
+            .collect::<Vec<_>>();
 
         let mut last_song: Option<SongInfo> = None;
 
         let lifecycle_receiver = self.lifecycle_receiver.clone();
+
         loop {
             let song = self.driver.fetch_song_info();
 
-            // Check if the song changed
+            // Only raise when song has changed
             if song != last_song {
                 last_song = song.clone();
-                for sender in &song_channels {
-                    sender.send(song.clone()).expect("Cannot send updated song");
-                }
-                if let Some(console_actor) = &self.console_actor {
-                    console_actor
-                        .send(song.clone())
-                        .expect("Cannot send updated song");
-                }
-                if let Some(window_actor) = &self.window_actor {
-                    window_actor
-                        .send(song.clone())
-                        .expect("Cannot send updated song");
+                for actor in &actors {
+                    actor.send(song.clone()).expect("Cannot send updated song");
                 }
             }
 
-            match lifecycle_receiver.recv_timeout(self.duration_polling) {
+            match lifecycle_receiver.recv_timeout(self.polling_interval) {
                 Err(RecvTimeoutError::Timeout) => {
                     // Timeout is an expected result and not an error
                 }
                 Err(RecvTimeoutError::Disconnected) | Ok(LifecycleEvent::Exit) => {
-                    drop(song_channels);
                     break;
                 }
             }
         }
 
-        self.clean_up_before_exit();
+        for actor in actors {
+            drop(actor.sender);
+        }
     }
 }

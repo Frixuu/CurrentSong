@@ -8,6 +8,7 @@ mod app;
 mod config;
 mod console;
 mod driver;
+mod file;
 mod process;
 mod song;
 mod window;
