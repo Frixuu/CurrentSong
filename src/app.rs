@@ -135,7 +135,9 @@ impl App {
 
     fn add_gui_window(&mut self) {
         let lifecycle_sender = self.lifecycle_sender.clone();
-        self.window_actor = WindowActor::new(lifecycle_sender).spawn().into();
+        self.window_actor = WindowActor::new(lifecycle_sender, self.config.clone())
+            .spawn()
+            .into();
     }
 
     /// Registers a thread in this app which purpose is to write song info to file.

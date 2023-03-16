@@ -4,18 +4,22 @@ use windows_sys::{
     Win32::UI::WindowsAndMessaging::*,
 };
 
-struct MainWindowData {
-    handle: HWND,
+struct SearchContext {
     pid: u32,
+    handle: HWND,
 }
 
 /// Gets an opaque handle to a main window of a process.
 /// Note: returned HWND might be zero.
 fn find_main_window_by_process(pid: u32) -> HWND {
-    // Capture in EnumWindows
-    let mut data = MainWindowData { handle: 0, pid };
-    unsafe { EnumWindows(Some(enum_windows_callback), &mut data as *mut _ as LPARAM) };
-    data.handle
+    let mut context = SearchContext { pid, handle: 0 };
+    unsafe {
+        EnumWindows(
+            Some(enum_windows_callback),
+            &mut context as *mut _ as LPARAM,
+        )
+    };
+    context.handle
 }
 
 /// Fetches title of a process' main window, if it has one.
@@ -26,30 +30,28 @@ pub fn find_main_window_title(pid: u32) -> Option<String> {
         return None;
     }
 
-    // The "window" might have an empty title. This can be the case for explorer.exe
+    // The "window" might have an empty title.
+    // This can be the case for explorer.exe
     let length = unsafe { GetWindowTextLengthW(hwnd) };
     if length == 0 {
         return Some("".into());
     }
 
-    // Build wide-string (UTF-16) buffer
-    let mut wstr = Vec::<u16>::with_capacity(length as usize + 1);
+    let mut title = Vec::with_capacity(length as usize + 1);
     unsafe {
-        let lpwstr = wstr.as_mut_ptr();
-        let title_length = GetWindowTextW(hwnd, lpwstr, wstr.capacity() as i32);
-        wstr.set_len(title_length as usize);
+        let length = GetWindowTextW(hwnd, title.as_mut_ptr(), title.capacity() as i32);
+        title.set_len(length as usize);
     }
 
-    String::from_utf16(&wstr).ok()
+    String::from_utf16(&title).ok()
 }
 
 unsafe extern "system" fn enum_windows_callback(hwnd: HWND, param: LPARAM) -> BOOL {
-    // Get process ID of the queried window handle
     let mut pid: u32 = 0;
     GetWindowThreadProcessId(hwnd, &mut pid);
 
-    let mut data = param as *mut MainWindowData;
-    if (*data).pid != pid {
+    let mut context = param as *mut SearchContext;
+    if (*context).pid != pid {
         // Not the process we're looking for
         return true.into();
     }
@@ -61,12 +63,11 @@ unsafe extern "system" fn enum_windows_callback(hwnd: HWND, param: LPARAM) -> BO
     }
 
     if IsWindowVisible(hwnd) == 0 {
-        // We want a visible window only
+        // We want visible windows only
         return true.into();
     }
 
-    // Store current window handle in captured context
-    (*data).handle = hwnd;
-    // Signal EnumWindows we do not want to iterate windows anymore
+    (*context).handle = hwnd;
+    // Signal EnumWindows we no longer want to iterate
     false.into()
 }

@@ -26,7 +26,7 @@ impl Config {
         self.song_format.as_str()
     }
 
-    /// Attempts to read and deserialize a new Config instance
+    /// Attempts to read and deserialize a new [Config] instance
     /// from a file with the provided path.
     pub fn try_read<P>(path: P) -> Result<Config, Error>
     where
@@ -48,12 +48,12 @@ impl Config {
         }
     }
 
-    /// Attempts to serialize this Config instance to a file.
+    /// Attempts to serialize this [Config] instance to a file.
     pub fn try_save<P>(&self, path: P) -> Result<(), Error>
     where
         P: AsRef<Path>,
     {
-        let config_json = serde_json::to_string_pretty(&self).unwrap();
+        let config_json = serde_json::to_string_pretty(&self)?;
         fs::write(&path, config_json)?;
         Ok(())
     }

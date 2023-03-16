@@ -1,18 +1,27 @@
-use std::{cell::RefCell, ops::Deref, rc::Rc, sync::Arc};
+use std::{
+    cell::RefCell,
+    ops::Deref,
+    rc::Rc,
+    sync::{Arc, Mutex},
+    thread,
+};
 
 use flume::{Receiver, Sender};
-use nwg::{EmbedResource, Event, Icon, NativeUi, WindowFlags};
-use parking_lot::Mutex;
+use nwg::{
+    EmbedResource, Event, Font, GridLayout, Icon, Label, NativeUi, Notice, NwgError, Window,
+    WindowFlags,
+};
 
-use crate::{app::LifecycleEvent, song::SongInfo, Actor, ActorHandle};
+use crate::{app::LifecycleEvent, config::Config, song::SongInfo, Actor, ActorHandle};
 
 pub struct WindowActor {
     sender: Sender<LifecycleEvent>,
+    config: Arc<Config>,
 }
 
 impl WindowActor {
-    pub fn new(sender: Sender<LifecycleEvent>) -> Self {
-        Self { sender }
+    pub fn new(sender: Sender<LifecycleEvent>, config: Arc<Config>) -> Self {
+        Self { sender, config }
     }
 }
 
@@ -22,10 +31,11 @@ impl Actor for WindowActor {
         let (s, r) = flume::unbounded();
         ActorHandle {
             sender: s,
-            thread_handle: std::thread::spawn(move || {
+            thread_handle: thread::spawn(move || {
                 nwg::init().expect("cannot init NWG");
-                nwg::Font::set_global_family("Segoe UI").expect("cannot set default font");
+                Font::set_global_family("Segoe UI").expect("cannot set default font");
                 let state: WindowApp = WindowApp {
+                    config: self.config,
                     sender: Some(self.sender),
                     receiver: Some(r),
                     ..Default::default()
@@ -39,17 +49,54 @@ impl Actor for WindowActor {
 
 #[derive(Default)]
 struct WindowApp {
-    window: nwg::Window,
-    layout: nwg::GridLayout,
-    label: nwg::Label,
-    song_notice: nwg::Notice,
+    config: Arc<Config>,
+    window: Window,
+    layout: GridLayout,
+    label_artist: Label,
+    label_title: Label,
+    song_notice: Notice,
     current_song: Arc<Mutex<Option<SongInfo>>>,
     sender: Option<Sender<LifecycleEvent>>,
     receiver: Option<Receiver<Option<SongInfo>>>,
 }
 
 impl WindowApp {
-    fn exit(&self) {
+    fn on_init(&self) {
+        let song_receiver = self.receiver.clone().unwrap();
+        let song_arc = self.current_song.clone();
+        let notice_sender = self.song_notice.sender();
+        notice_sender.notice();
+        let _ = thread::spawn(move || loop {
+            match song_receiver.recv() {
+                Ok(data) => {
+                    {
+                        let mut song = song_arc.lock().unwrap();
+                        *song = data;
+                    }
+                    notice_sender.notice();
+                }
+                Err(_) => break,
+            }
+        });
+    }
+
+    fn on_notice(&self) {
+        let _config = self.config.as_ref();
+        let song_arc = self.current_song.lock().unwrap();
+        let song: Option<SongInfo> = song_arc.clone();
+        match song {
+            Some(song) => {
+                self.label_artist.set_text(&song.artist);
+                self.label_title.set_text(&song.title);
+            }
+            None => {
+                self.label_artist.set_text("N/A");
+                self.label_title.set_text("---");
+            }
+        }
+    }
+
+    fn on_window_close(&self) {
         nwg::stop_thread_dispatch();
         if let Some(sender) = &self.sender {
             sender
@@ -64,10 +111,10 @@ struct WindowUi {
     default_handler: RefCell<Option<nwg::EventHandler>>,
 }
 
-impl nwg::NativeUi<WindowUi> for WindowApp {
-    fn build_ui(mut state: Self) -> Result<WindowUi, nwg::NwgError> {
+impl NativeUi<WindowUi> for WindowApp {
+    fn build_ui(mut state: Self) -> Result<WindowUi, NwgError> {
         let embed = EmbedResource::load(None)?;
-        nwg::Window::builder()
+        Window::builder()
             .size((400, 120))
             .flags(WindowFlags::union(
                 WindowFlags::union(WindowFlags::WINDOW, WindowFlags::VISIBLE),
@@ -77,60 +124,43 @@ impl nwg::NativeUi<WindowUi> for WindowApp {
             .icon(Some(&Icon::from_embed(&embed, None, Some("ICON"))?))
             .build(&mut state.window)?;
 
-        nwg::Notice::builder()
+        Notice::builder()
             .parent(&state.window)
             .build(&mut state.song_notice)?;
 
-        nwg::Label::builder()
+        Label::builder()
             .text("")
             .parent(&state.window)
-            .build(&mut state.label)?;
+            .build(&mut state.label_artist)?;
+
+        Label::builder()
+            .text("")
+            .parent(&state.window)
+            .build(&mut state.label_title)?;
+
+        GridLayout::builder()
+            .parent(&mut state.window)
+            .max_row(Some(2))
+            .spacing(5)
+            .margin([30, 15, 30, 15])
+            .child(0, 0, &state.label_artist)
+            .child(0, 1, &state.label_title)
+            .build(&state.layout)?;
 
         let ui = WindowUi {
             inner: Rc::new(state),
             default_handler: Default::default(),
         };
 
-        let evt_ui = Rc::downgrade(&ui.inner);
+        let app = Rc::downgrade(&ui.inner);
         let handle_events = move |evt, _data, handle| {
-            if let Some(evt_ui) = evt_ui.upgrade() {
+            if let Some(app) = app.upgrade() {
                 match evt {
-                    Event::OnInit => {
-                        let song_receiver = evt_ui.receiver.clone().unwrap();
-                        let song_arc = evt_ui.current_song.clone();
-                        let notice_sender = evt_ui.song_notice.sender();
-                        notice_sender.notice();
-                        let _ = std::thread::spawn(move || loop {
-                            match song_receiver.recv() {
-                                Ok(data) => {
-                                    {
-                                        let mut song = song_arc.lock();
-                                        *song = data;
-                                    }
-                                    notice_sender.notice();
-                                }
-                                Err(_) => {}
-                            }
-                        });
-                    }
-
-                    Event::OnNotice => {
-                        let song_arc = evt_ui.current_song.lock();
-                        let song: Option<SongInfo> = song_arc.clone();
-                        match song {
-                            Some(song) => {
-                                evt_ui
-                                    .label
-                                    .set_text(&format!("{} - {}", song.artist, song.title));
-                            }
-                            None => {
-                                evt_ui.label.set_text("---");
-                            }
-                        }
-                    }
+                    Event::OnInit => app.on_init(),
+                    Event::OnNotice => app.on_notice(),
                     Event::OnWindowClose => {
-                        if &handle == &evt_ui.window {
-                            WindowApp::exit(&evt_ui);
+                        if &handle == &app.window {
+                            app.on_window_close();
                         }
                     }
                     _ => {}
@@ -143,14 +173,6 @@ impl nwg::NativeUi<WindowUi> for WindowApp {
             handle_events,
         ));
 
-        nwg::GridLayout::builder()
-            .parent(&ui.window)
-            .max_row(Some(1))
-            .spacing(5)
-            .margin([15, 15, 15, 15])
-            .child(0, 0, &ui.inner.label)
-            .build(&ui.inner.layout)?;
-
         return Ok(ui);
     }
 }
@@ -158,8 +180,8 @@ impl nwg::NativeUi<WindowUi> for WindowApp {
 impl Drop for WindowUi {
     fn drop(&mut self) {
         let handler = self.default_handler.borrow();
-        if handler.is_some() {
-            nwg::unbind_event_handler(handler.as_ref().unwrap());
+        if let Some(handler) = handler.as_ref() {
+            nwg::unbind_event_handler(handler);
         }
     }
 }
